@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Matrix Control</title>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #121212;
+      color: #fff;
+      padding: 30px;
+      max-width: 600px;
+      margin: auto;
+    }
+
+    h2, h3 {
+      color: #00e676;
+    }
+
+    input[type="text"], input[type="password"] {
+      padding: 10px;
+      font-size: 16px;
+      width: 60%;
+      border-radius: 8px;
+      border: none;
+      outline: none;
+      margin-right: 10px;
+      background: #2c2c2c;
+      color: white;
+    }
+
+    button {
+      background: #00e676;
+      border: none;
+      color: #000;
+      padding: 10px 16px;
+      font-size: 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.3s;
+      margin-top: 10px;
+    }
+
+    button:hover {
+      background: #00c853;
+    }
+
+    .emoji {
+      font-size: 30px;
+      cursor: pointer;
+      padding: 8px;
+      border-radius: 8px;
+      margin: 5px;
+      display: inline-block;
+      background: #2c2c2c;
+      transition: background 0.3s;
+    }
+
+    .emoji:hover {
+      background: #424242;
+    }
+
+    .emoji.selected {
+      background: #00e676;
+      color: #000;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(8, 30px);
+      grid-gap: 4px;
+      margin: 15px 0;
+    }
+
+    .cell {
+      width: 30px;
+      height: 30px;
+      background: #2c2c2c;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .cell.on {
+      background: #00e676;
+    }
+
+    .section {
+      display: none;
+      margin-bottom: 30px;
+    }
+
+    .active {
+      display: block;
+    }
+
+    #authStatus, #bindStatus {
+      margin-top: 10px;
+      color: #ff5252;
+    }
+
+    .success {
+      color: #00e676;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Auth Section -->
+  <div id="authSection" class="section active">
+    <h2>Matrix Control</h2>
+    <h3>Вход / Регистрация</h3>
+    <input type="text" id="login" placeholder="Логин">
+    <input type="password" id="password" placeholder="Пароль">
+    <button onclick="register()">Регистрация</button>
+    <button onclick="login()">Вход</button>
+    <div id="authStatus"></div>
+  </div>
+
+  <!-- Bind Section -->
+  <div id="bindSection" class="section">
+    <h2>Привязка матрицы</h2>
+    <p>Добро пожаловать, <span id="usernameDisplay"></span>!</p>
+    <input type="text" id="serialInput" placeholder="Серийный номер матрицы">
+    <button onclick="bindMatrix()">Привязать матрицу</button>
+    <div id="bindStatus"></div>
+  </div>
+
+  <!-- Control Section -->
+  <div id="controlSection" class="section">
+    <h2>Управление матрицей</h2>
+    <p>Управление матрицей: <span id="matrixInfo"></span></p>
+    
+    <!-- Text Input -->
+    <input type="text" id="textInput" placeholder="Введите текст...">
+    <button onclick="sendText()">Отправить текст</button>
+
+    <hr>
+
+    <!-- Emoji Picker -->
+    <h3>Выберите эмодзи</h3>
+    <div id="emojiContainer"></div>
+    <button onclick="sendEmoji()">Отправить эмодзи</button>
+
+    <hr>
+
+    <!-- 8x8 Draw -->
+    <h3>Нарисуй изображение 8x8</h3>
+    <div class="grid" id="pixelGrid"></div>
+    <button onclick="sendCustom()">Отправить изображение</button>
+  </div>
+
+  <script>
+
+    let authToken = null;
+    let currentUser = null;
+    let userMatrix = null;
+    const client = mqtt.connect("wss://broker.emqx.io:8084/mqtt");
+
+    // Initialize UI
+    const emojiMap = {
+      angryface: "0066660018244281", smile: "006666000081423c", frown: "00666600003c4281",
+      winkright: "606600000081423c", winkleft: "066600000081423c", blink: "006600000081423c",
+      laughing: "00666600ff81423c", tongueout: "006666007e0a0400", expressionless: "00666600ff000000",
+      heartoutline: "6699818142241800", heartfull: "66ffffffff7e3c18", note: "040607043c7c7c38",
+      clock: "3c5291919181423c", thincheck: "0000010204885020", cross: "c3e77e3c3c7ee7c3",
+      circle: "3c4281818181423c", donut: "3c7effe7e7ff7e3c", equality: "00ffff0000ffff00",
+      target: "3c7ec3dbdbc37e3c", bell: "183c3c3c3c7e0018", ball: "3c7effffffff7e3c",
+      thinsquare: "ff818181818181ff", thicksquare: "ffffc3c3c3c3ffff", centeredsquare1: "00003c3c3c3c0000",
+      arrowright: "00080c0eff0e0c08", arrowleft: "00103070ff703010", arrowup: "10387cfe10101010",
+      arrowdown: "10101010fe7c3810"
+    };
+
+    const emojiNames = {
+      angryface: "😠", smile: "😊", frown: "☹️", winkright: "😉", winkleft: "😉", blink: "😑",
+      laughing: "😂", tongueout: "😛", expressionless: "😐", heartoutline: "🤍", heartfull: "❤️",
+      note: "🎵", clock: "🕒", thincheck: "✔️", cross: "❌", circle: "⭕", donut: "🍩",
+      equality: "🟰", target: "🎯", bell: "🔔", ball: "⚪", thinsquare: "◻️", thicksquare: "⬜",
+      centeredsquare1: "▫️", arrowright: "➡️", arrowleft: "⬅️", arrowup: "⬆️", arrowdown: "⬇️"
+    };
+
+    // Initialize emoji container
+    const emojiContainer = document.getElementById("emojiContainer");
+    emojiContainer.innerHTML = Object.keys(emojiMap).map(key => {
+      return `<span class="emoji" onclick="selectEmoji(this, '${key}')">${emojiNames[key] || "🎲"}</span>`;
+    }).join('');
+
+    // Initialize pixel grid
+    const grid = document.getElementById("pixelGrid");
+    for (let i = 0; i < 64; i++) {
+      const cell = document.createElement("div");
+      cell.classList.add("cell");
+      cell.addEventListener("click", () => cell.classList.toggle("on"));
+      grid.appendChild(cell);
+    }
+
+    // Switch between sections
+    function showSection(sectionId) {
+      document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+      document.getElementById(sectionId).classList.add('active');
+    }
+
+    // Auth functions
+    function validateInput(username, password) {
+      const status = document.getElementById("authStatus");
+      status.classList.remove('success');
+
+      if (!username || !password) {
+        status.textContent = "Логин и пароль не должны быть пустыми";
+        return false;
+      }
+
+      const usernameRegex = /^[a-zA-Z0-9_]{3,20}$/;
+      const passwordRegex = /^[\S]{6,30}$/;
+
+      if (!usernameRegex.test(username)) {
+        status.textContent = "Логин должен содержать только буквы, цифры и подчёркивания (3-20 символов)";
+        return false;
+      }
+
+      if (!passwordRegex.test(password)) {
+        status.textContent = "Пароль должен быть без пробелов, длиной от 6 до 30 символов";
+        return false;
+      }
+
+      return true;
+    }
+
+    function register() {
+      const username = document.getElementById("login").value.trim();
+      const password = document.getElementById("password").value.trim();
+
+      if (!validateInput(username, password)) return;
+
+      fetch("/api/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password })
+      })
+      .then(res => res.json())
+      .then(data => {
+        const status = document.getElementById("authStatus");
+        if (data.token) {
+          token = data.token;
+          username = data.username;
+          status.textContent = "Регистрация успешна!";
+          status.classList.add('success');
+          document.getElementById("usernameDisplay").textContent = username;
+          checkUserStatus();
+        } else {
+          status.textContent = data.error || "Ошибка регистрации";
+        }
+      });
+    }
+
+    // function checkUserStatus() {
+    //   if (!authToken) return;
+
+    //   // Проверяем, есть ли у пользователя привязанная матрица
+    //   fetch("/api/user/status", {
+    //     headers: { "Authorization": `Bearer ${authToken}` }
+    //   })
+    //   .then(response => {
+    //     if (!response.ok) throw new Error('Ошибка сервера');
+    //     return response.json();
+    //   })
+    //   .then(data => {
+    //     if (data.hasMatrix) {
+    //       // Получаем информацию о матрице пользователя
+    //       fetch("/api/matrices", {
+    //         headers: { "Authorization": `Bearer ${authToken}` }
+    //       })
+    //       .then(res => {
+    //         if (!res.ok) throw new Error('Ошибка при получении матриц');
+    //         return res.json();
+    //       })
+    //       .then(matrices => {
+    //         if (matrices.length > 0) {
+    //           userMatrix = matrices[0];
+    //           document.getElementById("matrixInfo").textContent = `ID: ${userMatrix.id}`;
+    //           showSection("controlSection");
+              
+    //           // Подключаемся к MQTT с правильным топиком
+    //           if (client && userMatrix.topic) {
+    //             client.subscribe(userMatrix.topic);
+    //           }
+    //         }
+    //       })
+    //       .catch(error => {
+    //         console.error('Matrix fetch error:', error);
+    //       });
+    //     } else {
+    //       showSection("bindSection");
+    //     }
+    //   })
+    //   .catch(error => {
+    //     console.error('Status check error:', error);
+    //     showSection("authSection");
+    //   });
+    // }
+    function checkUserStatus() {
+      if (!authToken) return;
+
+      fetch("/api/user/status", {
+        headers: { "Authorization": `Bearer ${authToken}` }
+      })
+      .then(response => {
+        if (!response.ok) throw new Error('Ошибка сервера');
+        return response.json();
+      })
+      .then(data => {
+        if (data.hasMatrix) {
+          fetchMatrices();
+        } else {
+          showSection("bindSection");
+        }
+      })
+      .catch(error => {
+        console.error('Status check error:', error);
+        showSection("authSection");
+      });
+    }
+
+    function fetchMatrices() {
+      fetch("/api/matrices", {
+        headers: { "Authorization": `Bearer ${authToken}` }
+      })
+      .then(response => {
+        if (!response.ok) throw new Error('Ошибка при получении матриц');
+        return response.json();
+      })
+      .then(matrices => {
+        if (matrices.length > 0) {
+          userMatrix = matrices[0];
+          document.getElementById("matrixInfo").textContent = `ID: ${userMatrix.id}`;
+          showSection("controlSection");
+          
+          if (client && userMatrix.topic) {
+            client.subscribe(userMatrix.topic);
+          }
+        }
+      })
+      .catch(error => {
+        console.error('Matrix fetch error:', error);
+      });
+    }
+
+    function login() {
+      const usernameInput = document.getElementById("login").value.trim();
+      const passwordInput = document.getElementById("password").value.trim();
+
+      if (!validateInput(usernameInput, passwordInput)) return;
+
+      fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          username: usernameInput, 
+          password: passwordInput 
+        })
+      })
+      .then(response => {
+        if (!response.ok) throw new Error('Ошибка сервера');
+        return response.json();
+      })
+      .then(data => {
+        if (data.token && data.username) {
+          authToken = data.token;
+          currentUser = data.username;
+          
+          document.getElementById("authStatus").textContent = "Успешный вход!";
+          document.getElementById("authStatus").className = "success";
+          document.getElementById("usernameDisplay").textContent = currentUser;
+          
+          // Проверяем статус пользователя и показываем соответствующий раздел
+          checkUserStatus();
+        } else {
+          throw new Error(data.error || "Неизвестная ошибка");
+        }
+      })
+      .catch(error => {
+        console.error('Login error:', error);
+        document.getElementById("authStatus").textContent = error.message;
+        document.getElementById("authStatus").className = "";
+      });
+    }
+
+    function bindMatrix() {
+      const serialNumber = document.getElementById("serialInput").value.trim();
+      if (!serialNumber) {
+        document.getElementById("bindStatus").textContent = "Введите серийный номер";
+        return;
+      }
+
+      fetch("/api/matrices/bind", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${authToken}`  // Исправлено с token на authToken
+        },
+        body: JSON.stringify({ serial_number: serialNumber })
+      })
+      .then(res => {
+        if (!res.ok) throw new Error('Ошибка привязки');
+        return res.json();
+      })
+      .then(data => {
+        const status = document.getElementById("bindStatus");
+        status.textContent = data.message;
+        status.classList.add('success');
+        setTimeout(() => checkUserStatus(), 1000);
+      })
+      .catch(error => {
+        console.error('Bind error:', error);
+        document.getElementById("bindStatus").textContent = error.message;
+      });
+    }
+
+    // Control functions
+    // function sendMQTTMessage(mode, payload) {
+    //   if (!userMatrix || !authToken) {
+    //     console.error("Matrix not bound or not authenticated");
+    //     return;
+    //   }
+      
+    //   const message = JSON.stringify({ 
+    //     matrix_id: userMatrix.id,
+    //     payload: payload 
+    //   });
+
+    //   fetch("/api/send", {
+    //     method: "POST",
+    //     headers: { 
+    //       "Content-Type": "application/json",
+    //       "Authorization": `Bearer ${authToken}`
+    //     },
+    //     body: message
+    //   })
+    //   .then(res => {
+    //     if (!res.ok) throw new Error('Ошибка отправки');
+    //     return res.json();
+    //   })
+    //   .then(data => {
+    //     console.log("Message sent:", data);
+    //   })
+    //   .catch(error => {
+    //     console.error("Send error:", error);
+    //   });
+    // }
+    function sendMQTTMessage(mode, payload) {
+      if (!userMatrix || !authToken) {
+        console.error("Matrix not bound or not authenticated");
+        return;
+      }
+      
+      const message = JSON.stringify({ 
+        matrix_id: userMatrix.id,
+        mode: mode, // Добавляем mode в запрос
+        payload: payload 
+      });
+
+      fetch("/api/send", {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${authToken}`
+        },
+        body: message
+      })
+      .then(res => {
+        if (!res.ok) throw new Error('Ошибка отправки');
+        return res.json();
+      })
+      .then(data => {
+        console.log("Message sent:", data);
+      })
+      .catch(error => {
+        console.error("Send error:", error);
+        alert("Ошибка отправки: " + error.message);
+      });
+    }
+    
+    function sendText() {
+      const text = document.getElementById("textInput").value;
+      if (text) sendMQTTMessage("text", text);
+    }
+
+    let selectedEmojiKey = null;
+    function selectEmoji(el, key) {
+      document.querySelectorAll(".emoji").forEach(e => e.classList.remove("selected"));
+      el.classList.add("selected");
+      selectedEmojiKey = key;
+    }
+
+    function sendEmoji() {
+      if (!selectedEmojiKey || !emojiMap[selectedEmojiKey]) {
+        alert("Выберите эмодзи");
+        return;
+      }
+      const hexString = emojiMap[selectedEmojiKey];
+      const bytes = hexString.match(/.{1,2}/g).map(h => parseInt(h, 16));
+      const binString = bytes.map(b => b.toString(2).padStart(8, '0')).join('');
+      sendMQTTMessage("emoji", binString);
+    }
+
+    function sendCustom() {
+      const cells = document.querySelectorAll(".cell");
+      let bits = "";
+      cells.forEach(cell => bits += cell.classList.contains("on") ? "1" : "0");
+      sendMQTTMessage("custom", bits);
+    }
+
+    // Initialize MQTT
+    client.on("connect", () => console.log("MQTT connected"));
+  </script>
+</body>
+</html>
